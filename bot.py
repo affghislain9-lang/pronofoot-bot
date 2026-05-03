@@ -4,9 +4,9 @@ from datetime import datetime
 import schedule
 import time
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
-API_KEY = os.environ.get("API_KEY")
+TELEGRAM_TOKEN = os.environ.get("8674682571:AAENlfNuobfT-jyKU-dLng-KhdbR8zp-V-w")
+CHAT_ID = os.environ.get("5799852232")
+API_KEY = os.environ.get("74f87c4af90801cb16a63efc59c301a5")
 
 def send_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
