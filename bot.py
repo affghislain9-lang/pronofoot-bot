@@ -4,9 +4,9 @@ from datetime import datetime
 import schedule
 import time
 
-TELEGRAM_TOKEN = os.environ.get("8674682571:AAENlfNuobfT-jyKU-dLng-KhdbR8zp-V-w")
-CHAT_ID = os.environ.get("5799852232")
-API_KEY = os.environ.get("74f87c4af90801cb16a63efc59c301a5")
+TELEGRAM_TOKEN = "8674682571:AAENlfNuobfT-jyKU-dLng-KhdbR8zp-V-w"
+CHAT_ID = "5799852232"
+API_KEY = "74f87c4af90801cb16a63efc59c301a5"
 
 def send_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -59,12 +59,11 @@ def calculate_over_probability(home_stats, away_stats, threshold):
 
 def analyze_matches():
     print("Analyse des matchs en cours...")
-    send_message("🔍 Analyse des matchs du jour en cours...")
+    send_message("Analyse des matchs du jour en cours...")
     fixtures = get_fixtures()
     if not fixtures:
-        send_message("⚠️ Aucun match trouvé pour aujourd'hui.")
+        send_message("Aucun match trouve pour aujourd'hui.")
         return
-
     top_pronostics = []
     for fixture in fixtures[:20]:
         try:
@@ -95,27 +94,24 @@ def analyze_matches():
         except Exception as e:
             print("Erreur:", e)
             continue
-
     top_pronostics.sort(key=lambda x: x["best"], reverse=True)
     top_5 = top_pronostics[:5]
-
     if not top_5:
-        send_message("⚠️ Aucun pronostic fiable trouvé aujourd'hui.")
+        send_message("Aucun pronostic fiable trouve aujourd'hui.")
         return
-
     today = datetime.now().strftime("%d/%m/%Y")
-    message = f"🗓 *PRONOSTICS DU JOUR — {today}*\n\n"
+    message = f"PRONOSTICS DU JOUR - {today}\n\n"
     for i, p in enumerate(top_5, 1):
-        message += f"*{i}. {p['match']}* — 🕐 {p['time']}\n"
-        message += f"   ✅ BTTS : *{p['btts']}%*\n"
-        message += f"   ✅ +1.5 buts : *{p['over15']}%*\n"
-        message += f"   ✅ +2.5 buts : *{p['over25']}%*\n\n"
-    message += "⚠️ _Pariez avec responsabilité_"
+        message += f"{i}. {p['match']} - {p['time']}\n"
+        message += f"   BTTS : {p['btts']}%\n"
+        message += f"   +1.5 buts : {p['over15']}%\n"
+        message += f"   +2.5 buts : {p['over25']}%\n\n"
+    message += "Pariez avec responsabilite"
     send_message(message)
 
 def run():
-    print("Bot démarré !")
-    send_message("🤖 Bot PronoFoot démarré avec succès !")
+    print("Bot demarre !")
+    send_message("Bot PronoFoot demarre !")
     analyze_matches()
     schedule.every().day.at("08:00").do(analyze_matches)
     while True:
