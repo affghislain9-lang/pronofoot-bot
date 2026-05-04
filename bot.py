@@ -3,7 +3,7 @@ import time
 
 TELEGRAM_TOKEN = "8674682571:AAENlfNuobfT-jyKU-dLng-KhdbR8zp-V-w"
 CHAT_ID = "5799852232"
-API_KEY = "74f87c4af90801cb16a63efc59c301a5"
+API_KEY = "b1d1edab0f951b9b04fc2315197ac908"
 
 def send_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
