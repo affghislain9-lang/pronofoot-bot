@@ -5,48 +5,35 @@ TELEGRAM_TOKEN = "8674682571:AAENlfNuobfT-jyKU-dLng-KhdbR8zp-V-w"
 CHAT_ID = "5799852232"
 API_KEY = "74f87c4af90801cb16a63efc59c301a5"
 
-TEAMS = {
-    "psg": (85, 61, 2024),
-    "paris": (85, 61, 2024),
-    "lyon": (80, 61, 2024),
-    "marseille": (81, 61, 2024),
-    "monaco": (91, 61, 2024),
-    "arsenal": (42, 39, 2024),
-    "chelsea": (49, 39, 2024),
-    "manchester city": (50, 39, 2024),
-    "man city": (50, 39, 2024),
-    "liverpool": (40, 39, 2024),
-    "manchester united": (33, 39, 2024),
-    "man united": (33, 39, 2024),
-    "tottenham": (47, 39, 2024),
-    "real madrid": (541, 140, 2024),
-    "barcelona": (529, 140, 2024),
-    "atletico madrid": (530, 140, 2024),
-    "sevilla": (536, 140, 2024),
-    "juventus": (496, 135, 2024),
-    "milan": (489, 135, 2024),
-    "inter": (505, 135, 2024),
-    "napoli": (492, 135, 2024),
-    "roma": (497, 135, 2024),
-    "bayern": (157, 78, 2024),
-    "dortmund": (165, 78, 2024),
-    "leipzig": (173, 78, 2024),
-    "velez": (435, 128, 2024),
-    "newells": (436, 128, 2024),
-    "river plate": (403, 128, 2024),
-    "boca juniors": (405, 128, 2024),
-}
-
 def send_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, json={"chat_id": CHAT_ID, "text": text})
 
-def find_team(name):
-    name = name.lower().strip()
-    for key, val in TEAMS.items():
-        if key in name or name in key:
-            return val
-    return None
+def search_team(name):
+    url = "https://v3.football.api-sports.io/teams"
+    headers = {"x-apisports-key": API_KEY}
+    params = {"search": name}
+    r = requests.get(url, headers=headers, params=params)
+    print(f"Search {name}:", r.status_code, r.text[:200])
+    results = r.json().get("response", [])
+    if results:
+        team = results[0]["team"]
+        team_id = team["id"]
+        league_id, season = get_current_league(team_id)
+        return team_id, team["name"], league_id, season
+    return None, None, None, None
+
+def get_current_league(team_id):
+    url = "https://v3.football.api-sports.io/leagues"
+    headers = {"x-apisports-key": API_KEY}
+    params = {"team": team_id, "current": "true", "type": "League"}
+    r = requests.get(url, headers=headers, params=params)
+    results = r.json().get("response", [])
+    if results:
+        league_id = results[0]["league"]["id"]
+        season = results[0]["seasons"][0]["year"]
+        return league_id, season
+    return 39, 2024
 
 def get_team_stats(team_id, league_id, season):
     url = "https://v3.football.api-sports.io/teams/statistics"
@@ -90,19 +77,19 @@ def calculate_over(home_stats, away_stats, threshold):
 def analyze_h2h(fixtures):
     if not fixtures:
         return 0, 0, 0
-    btts_count = over15_count = over25_count = 0
+    btts = over15 = over25 = 0
     for f in fixtures:
         home = f["goals"]["home"] or 0
         away = f["goals"]["away"] or 0
         total = home + away
         if home > 0 and away > 0:
-            btts_count += 1
+            btts += 1
         if total > 1:
-            over15_count += 1
+            over15 += 1
         if total > 2:
-            over25_count += 1
+            over25 += 1
     n = len(fixtures)
-    return round(btts_count/n*100), round(over15_count/n*100), round(over25_count/n*100)
+    return round(btts/n*100), round(over15/n*100), round(over25/n*100)
 
 def niveau(p):
     if p >= 75:
@@ -113,22 +100,21 @@ def niveau(p):
         return "RISQUE"
 
 def predict(home_name, away_name):
-    send_message(f"Analyse de {home_name} vs {away_name} en cours...")
+    send_message(f"Recherche de {home_name} et {away_name}...")
 
-    home_data = find_team(home_name)
-    away_data = find_team(away_name)
+    home_id, home_full, home_league, home_season = search_team(home_name)
+    away_id, away_full, away_league, away_season = search_team(away_name)
 
-    if not home_data or not away_data:
-        equipes_dispo = ", ".join(TEAMS.keys())
-        send_message(f"Equipe non trouvee.\n\nEquipes disponibles :\n{equipes_dispo}")
+    if not home_id:
+        send_message(f"Equipe '{home_name}' non trouvee. Essaie un autre nom.")
+        return
+    if not away_id:
+        send_message(f"Equipe '{away_name}' non trouvee. Essaie un autre nom.")
         return
 
-    home_id, home_league, home_season = home_data
-    away_id, away_league, away_season = away_data
-    league_id = home_league
-    season = home_season
+    send_message(f"Equipes trouvees : {home_full} vs {away_full}\nAnalyse en cours...")
 
-    home_stats = get_team_stats(home_id, league_id, season)
+    home_stats = get_team_stats(home_id, home_league, home_season)
     away_stats = get_team_stats(away_id, away_league, away_season)
     h2h = get_h2h(home_id, away_id)
 
@@ -141,11 +127,11 @@ def predict(home_name, away_name):
     over15_final = round((over15_stats + over15_h2h) / 2) if over15_h2h > 0 else over15_stats
     over25_final = round((over25_stats + over25_h2h) / 2) if over25_h2h > 0 else over25_stats
 
-    msg = f"PREDICTION : {home_name} vs {away_name}\n\n"
+    msg = f"PREDICTION : {home_full} vs {away_full}\n\n"
     msg += f"BTTS : {btts_final}% - {niveau(btts_final)}\n"
     msg += f"+1.5 buts : {over15_final}% - {niveau(over15_final)}\n"
     msg += f"+2.5 buts : {over25_final}% - {niveau(over25_final)}\n\n"
-    msg += f"H2H : {len(h2h)} matchs trouves\n\n"
+    msg += f"H2H : {len(h2h)} matchs analyses\n\n"
     msg += "Pariez avec responsabilite"
     send_message(msg)
 
@@ -157,7 +143,7 @@ def get_updates(offset=None):
 
 def run():
     print("Bot demarre !")
-    send_message("Bot PronoFoot pret ! Envoie un match comme : PSG vs Lyon")
+    send_message("Bot PronoFoot pret ! Envoie un match comme : Arsenal vs Chelsea")
     offset = None
     while True:
         try:
@@ -166,7 +152,7 @@ def run():
                 offset = update["update_id"] + 1
                 msg = update.get("message", {}).get("text", "")
                 if " vs " in msg.lower():
-                    parts = msg.lower().split(" vs ")
+                    parts = msg.split(" vs ")
                     if len(parts) == 2:
                         predict(parts[0].strip(), parts[1].strip())
         except Exception as e:
