@@ -1,4 +1,3 @@
-import os
 import requests
 from datetime import datetime
 import schedule
@@ -8,21 +7,24 @@ TELEGRAM_TOKEN = "8674682571:AAENlfNuobfT-jyKU-dLng-KhdbR8zp-V-w"
 CHAT_ID = "5799852232"
 API_KEY = "74f87c4af90801cb16a63efc59c301a5"
 
+TOP_LEAGUES = [39, 140, 135, 78, 61, 2, 3, 848, 529, 207, 233, 235, 88, 94, 144, 203, 197, 196, 169, 383]
+
 def send_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    r = requests.post(url, json={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"})
-    print("Telegram response:", r.status_code, r.text)
+    r = requests.post(url, json={"chat_id": CHAT_ID, "text": text})
+    print("Telegram:", r.status_code)
 
 def get_fixtures():
     today = datetime.now().strftime("%Y-%m-%d")
     url = "https://v3.football.api-sports.io/fixtures"
     headers = {"x-apisports-key": API_KEY}
-    params = {"date": today, "status": "NS"}
+    params = {"date": today}
     response = requests.get(url, headers=headers, params=params)
     print("Fixtures response:", response.status_code)
     data = response.json()
-    print("Total fixtures:", len(data.get("response", [])))
-    return data.get("response", [])
+    fixtures = data.get("response", [])
+    print("Total fixtures:", len(fixtures))
+    return [f for f in fixtures if f["fixture"]["status"]["short"] == "NS"]
 
 def get_team_stats(team_id, league_id, season):
     url = "https://v3.football.api-sports.io/teams/statistics"
@@ -31,41 +33,45 @@ def get_team_stats(team_id, league_id, season):
     response = requests.get(url, headers=headers, params=params)
     return response.json().get("response", {})
 
-def calculate_btts_probability(home_stats, away_stats):
+def calculate_btts(home_stats, away_stats):
     try:
-        home_scored = home_stats["goals"]["for"]["average"]["home"]
-        home_conceded = home_stats["goals"]["against"]["average"]["home"]
-        away_scored = away_stats["goals"]["for"]["average"]["away"]
-        away_conceded = away_stats["goals"]["against"]["average"]["away"]
-        home_scores = (float(home_scored) + float(away_conceded)) / 2
-        away_scores = (float(away_scored) + float(home_conceded)) / 2
-        btts_prob = min(home_scores, 1.5) * min(away_scores, 1.5) * 50
-        return min(round(btts_prob), 95)
+        h_scored = float(home_stats["goals"]["for"]["average"]["home"] or 0)
+        h_conceded = float(home_stats["goals"]["against"]["average"]["home"] or 0)
+        a_scored = float(away_stats["goals"]["for"]["average"]["away"] or 0)
+        a_conceded = float(away_stats["goals"]["against"]["average"]["away"] or 0)
+        home_scores = (h_scored + a_conceded) / 2
+        away_scores = (a_scored + h_conceded) / 2
+        prob = min(home_scores, 1.5) * min(away_scores, 1.5) * 50
+        return min(round(prob), 95)
     except:
         return 0
 
-def calculate_over_probability(home_stats, away_stats, threshold):
+def calculate_over(home_stats, away_stats, threshold):
     try:
-        home_avg = float(home_stats["goals"]["for"]["average"]["home"])
-        away_avg = float(away_stats["goals"]["for"]["average"]["away"])
-        total_avg = home_avg + away_avg
+        home_avg = float(home_stats["goals"]["for"]["average"]["home"] or 0)
+        away_avg = float(away_stats["goals"]["for"]["average"]["away"] or 0)
+        total = home_avg + away_avg
         if threshold == 1.5:
-            prob = min(round((total_avg / 2.5) * 85), 95)
+            return min(round((total / 2.5) * 85), 95)
         else:
-            prob = min(round((total_avg / 3.5) * 75), 95)
-        return prob
+            return min(round((total / 3.5) * 75), 95)
     except:
         return 0
 
 def analyze_matches():
-    print("Analyse des matchs en cours...")
+    print("Analyse en cours...")
     send_message("Analyse des matchs du jour en cours...")
     fixtures = get_fixtures()
+
     if not fixtures:
-        send_message("Aucun match trouve pour aujourd'hui.")
+        send_message("Aucun match programme aujourd'hui.")
         return
-    top_pronostics = []
-    for fixture in fixtures[:20]:
+
+    top = []
+    count = 0
+    for fixture in fixtures:
+        if count >= 30:
+            break
         try:
             league_id = fixture["league"]["id"]
             season = fixture["league"]["season"]
@@ -74,40 +80,52 @@ def analyze_matches():
             home_id = fixture["teams"]["home"]["id"]
             away_id = fixture["teams"]["away"]["id"]
             match_time = fixture["fixture"]["date"][11:16]
+            league_name = fixture["league"]["name"]
+
             home_stats = get_team_stats(home_id, league_id, season)
             away_stats = get_team_stats(away_id, league_id, season)
+            count += 1
+
             if not home_stats or not away_stats:
                 continue
-            btts = calculate_btts_probability(home_stats, away_stats)
-            over15 = calculate_over_probability(home_stats, away_stats, 1.5)
-            over25 = calculate_over_probability(home_stats, away_stats, 2.5)
-            best_prob = max(btts, over15, over25)
-            if best_prob >= 65:
-                top_pronostics.append({
+
+            btts = calculate_btts(home_stats, away_stats)
+            over15 = calculate_over(home_stats, away_stats, 1.5)
+            over25 = calculate_over(home_stats, away_stats, 2.5)
+            best = max(btts, over15, over25)
+
+            if best >= 60:
+                top.append({
                     "match": f"{home_team} vs {away_team}",
+                    "league": league_name,
                     "time": match_time,
                     "btts": btts,
                     "over15": over15,
                     "over25": over25,
-                    "best": best_prob
+                    "best": best
                 })
         except Exception as e:
             print("Erreur:", e)
             continue
-    top_pronostics.sort(key=lambda x: x["best"], reverse=True)
-    top_5 = top_pronostics[:5]
-    if not top_5:
+
+    top.sort(key=lambda x: x["best"], reverse=True)
+    top5 = top[:5]
+
+    if not top5:
         send_message("Aucun pronostic fiable trouve aujourd'hui.")
         return
+
     today = datetime.now().strftime("%d/%m/%Y")
-    message = f"PRONOSTICS DU JOUR - {today}\n\n"
-    for i, p in enumerate(top_5, 1):
-        message += f"{i}. {p['match']} - {p['time']}\n"
-        message += f"   BTTS : {p['btts']}%\n"
-        message += f"   +1.5 buts : {p['over15']}%\n"
-        message += f"   +2.5 buts : {p['over25']}%\n\n"
-    message += "Pariez avec responsabilite"
-    send_message(message)
+    msg = f"PRONOSTICS DU JOUR - {today}\n\n"
+    for i, p in enumerate(top5, 1):
+        msg += f"{i}. {p['match']}\n"
+        msg += f"   Ligue: {p['league']}\n"
+        msg += f"   Heure: {p['time']} UTC\n"
+        msg += f"   BTTS: {p['btts']}%\n"
+        msg += f"   +1.5 buts: {p['over15']}%\n"
+        msg += f"   +2.5 buts: {p['over25']}%\n\n"
+    msg += "Pariez avec responsabilite"
+    send_message(msg)
 
 def run():
     print("Bot demarre !")
