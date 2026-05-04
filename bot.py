@@ -1,37 +1,51 @@
 import requests
-from datetime import datetime
-import schedule
 import time
 
 TELEGRAM_TOKEN = "8674682571:AAENlfNuobfT-jyKU-dLng-KhdbR8zp-V-w"
 CHAT_ID = "5799852232"
 API_KEY = "74f87c4af90801cb16a63efc59c301a5"
 
-TOP_LEAGUES = [39, 140, 135, 78, 61, 2, 3, 848, 529, 207, 233, 235, 88, 94, 144, 203, 197, 196, 169, 383]
-
 def send_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    r = requests.post(url, json={"chat_id": CHAT_ID, "text": text})
-    print("Telegram:", r.status_code)
+    requests.post(url, json={"chat_id": CHAT_ID, "text": text})
 
-def get_fixtures():
-    today = datetime.now().strftime("%Y-%m-%d")
-    url = "https://v3.football.api-sports.io/fixtures"
+def search_team(name):
+    url = "https://v3.football.api-sports.io/teams"
     headers = {"x-apisports-key": API_KEY}
-    params = {"date": today}
-    response = requests.get(url, headers=headers, params=params)
-    print("Fixtures response:", response.status_code)
-    data = response.json()
-    fixtures = data.get("response", [])
-    print("Total fixtures:", len(fixtures))
-    return [f for f in fixtures if f["fixture"]["status"]["short"] == "NS"]
+    params = {"search": name}
+    r = requests.get(url, headers=headers, params=params)
+    results = r.json().get("response", [])
+    if results:
+        team = results[0]["team"]
+        leagues = get_team_league(team["id"])
+        return team["id"], team["name"], leagues
+    return None, None, None
+
+def get_team_league(team_id):
+    url = "https://v3.football.api-sports.io/leagues"
+    headers = {"x-apisports-key": API_KEY}
+    params = {"team": team_id, "current": "true"}
+    r = requests.get(url, headers=headers, params=params)
+    results = r.json().get("response", [])
+    if results:
+        league = results[0]["league"]
+        season = results[0]["seasons"][-1]["year"]
+        return league["id"], season
+    return None, None
 
 def get_team_stats(team_id, league_id, season):
     url = "https://v3.football.api-sports.io/teams/statistics"
     headers = {"x-apisports-key": API_KEY}
     params = {"team": team_id, "league": league_id, "season": season}
-    response = requests.get(url, headers=headers, params=params)
-    return response.json().get("response", {})
+    r = requests.get(url, headers=headers, params=params)
+    return r.json().get("response", {})
+
+def get_h2h(team1_id, team2_id):
+    url = "https://v3.football.api-sports.io/fixtures/headtohead"
+    headers = {"x-apisports-key": API_KEY}
+    params = {"h2h": f"{team1_id}-{team2_id}", "last": 10}
+    r = requests.get(url, headers=headers, params=params)
+    return r.json().get("response", [])
 
 def calculate_btts(home_stats, away_stats):
     try:
@@ -58,83 +72,94 @@ def calculate_over(home_stats, away_stats, threshold):
     except:
         return 0
 
-def analyze_matches():
-    print("Analyse en cours...")
-    send_message("Analyse des matchs du jour en cours...")
-    fixtures = get_fixtures()
-
+def analyze_h2h(fixtures):
     if not fixtures:
-        send_message("Aucun match programme aujourd'hui.")
+        return 0, 0, 0
+    btts_count = 0
+    over15_count = 0
+    over25_count = 0
+    for f in fixtures:
+        home = f["goals"]["home"] or 0
+        away = f["goals"]["away"] or 0
+        total = home + away
+        if home > 0 and away > 0:
+            btts_count += 1
+        if total > 1:
+            over15_count += 1
+        if total > 2:
+            over25_count += 1
+    n = len(fixtures)
+    return round(btts_count/n*100), round(over15_count/n*100), round(over25_count/n*100)
+
+def predict(home_name, away_name):
+    send_message(f"Analyse de {home_name} vs {away_name} en cours...")
+
+    home_id, home_full, home_league = search_team(home_name)
+    away_id, away_full, away_league = search_team(away_name)
+
+    if not home_id or not away_id:
+        send_message("Equipe non trouvee. Verifie les noms et reessaie.")
         return
 
-    top = []
-    count = 0
-    for fixture in fixtures:
-        if count >= 30:
-            break
-        try:
-            league_id = fixture["league"]["id"]
-            season = fixture["league"]["season"]
-            home_team = fixture["teams"]["home"]["name"]
-            away_team = fixture["teams"]["away"]["name"]
-            home_id = fixture["teams"]["home"]["id"]
-            away_id = fixture["teams"]["away"]["id"]
-            match_time = fixture["fixture"]["date"][11:16]
-            league_name = fixture["league"]["name"]
+    league_id, season = home_league if home_league[0] else away_league
 
-            home_stats = get_team_stats(home_id, league_id, season)
-            away_stats = get_team_stats(away_id, league_id, season)
-            count += 1
+    home_stats = get_team_stats(home_id, league_id, season)
+    away_stats = get_team_stats(away_id, league_id, season)
+    h2h = get_h2h(home_id, away_id)
 
-            if not home_stats or not away_stats:
-                continue
+    btts_stats = calculate_btts(home_stats, away_stats)
+    over15_stats = calculate_over(home_stats, away_stats, 1.5)
+    over25_stats = calculate_over(home_stats, away_stats, 2.5)
 
-            btts = calculate_btts(home_stats, away_stats)
-            over15 = calculate_over(home_stats, away_stats, 1.5)
-            over25 = calculate_over(home_stats, away_stats, 2.5)
-            best = max(btts, over15, over25)
+    btts_h2h, over15_h2h, over25_h2h = analyze_h2h(h2h)
 
-            if best >= 60:
-                top.append({
-                    "match": f"{home_team} vs {away_team}",
-                    "league": league_name,
-                    "time": match_time,
-                    "btts": btts,
-                    "over15": over15,
-                    "over25": over25,
-                    "best": best
-                })
-        except Exception as e:
-            print("Erreur:", e)
-            continue
+    btts_final = round((btts_stats + btts_h2h) / 2) if btts_h2h > 0 else btts_stats
+    over15_final = round((over15_stats + over15_h2h) / 2) if over15_h2h > 0 else over15_stats
+    over25_final = round((over25_stats + over25_h2h) / 2) if over25_h2h > 0 else over25_stats
 
-    top.sort(key=lambda x: x["best"], reverse=True)
-    top5 = top[:5]
+    def niveau(p):
+        if p >= 75:
+            return "TRES FIABLE"
+        elif p >= 60:
+            return "FIABLE"
+        else:
+            return "RISQUE"
 
-    if not top5:
-        send_message("Aucun pronostic fiable trouve aujourd'hui.")
-        return
-
-    today = datetime.now().strftime("%d/%m/%Y")
-    msg = f"PRONOSTICS DU JOUR - {today}\n\n"
-    for i, p in enumerate(top5, 1):
-        msg += f"{i}. {p['match']}\n"
-        msg += f"   Ligue: {p['league']}\n"
-        msg += f"   Heure: {p['time']} UTC\n"
-        msg += f"   BTTS: {p['btts']}%\n"
-        msg += f"   +1.5 buts: {p['over15']}%\n"
-        msg += f"   +2.5 buts: {p['over25']}%\n\n"
+    msg = f"PREDICTION : {home_full} vs {away_full}\n\n"
+    msg += f"BTTS (les 2 equipes marquent) : {btts_final}% - {niveau(btts_final)}\n"
+    msg += f"+1.5 buts : {over15_final}% - {niveau(over15_final)}\n"
+    msg += f"+2.5 buts : {over25_final}% - {niveau(over25_final)}\n\n"
+    msg += f"H2H (10 derniers matchs) : {len(h2h)} matches trouves\n\n"
     msg += "Pariez avec responsabilite"
     send_message(msg)
 
+def get_updates(offset=None):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+    params = {"timeout": 30, "offset": offset}
+    r = requests.get(url, params=params)
+    return r.json().get("result", [])
+
 def run():
     print("Bot demarre !")
-    send_message("Bot PronoFoot demarre !")
-    analyze_matches()
-    schedule.every().day.at("08:00").do(analyze_matches)
+    send_message("Bot PronoFoot pret ! Envoie un match comme : PSG vs Lyon")
+    offset = None
     while True:
-        schedule.run_pending()
-        time.sleep(60)
+        try:
+            updates = get_updates(offset)
+            for update in updates:
+                offset = update["update_id"] + 1
+                msg = update.get("message", {}).get("text", "")
+                if " vs " in msg.lower():
+                    parts = msg.split(" vs ")
+                    if len(parts) == 2:
+                        predict(parts[0].strip(), parts[1].strip())
+                elif " v " in msg.lower():
+                    parts = msg.split(" v ")
+                    if len(parts) == 2:
+                        predict(parts[0].strip(), parts[1].strip())
+        except Exception as e:
+            print("Erreur:", e)
+            time.sleep(5)
 
 if __name__ == "__main__":
     run()
