@@ -1,139 +1,133 @@
 import requests
 import time
+import json
+from collections import defaultdict
 
 TELEGRAM_TOKEN = "8674682571:AAENlfNuobfT-jyKU-dLng-KhdbR8zp-V-w"
 CHAT_ID = "5799852232"
-API_KEY = "b1d1edab0f951b9b04fc2315197ac908"
+
+# Base de données en mémoire
+players = {}
+matches = defaultdict(list)
 
 def send_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, json={"chat_id": CHAT_ID, "text": text})
 
-def search_team(name):
-    url = "https://v3.football.api-sports.io/teams"
-    headers = {"x-apisports-key": API_KEY}
-    params = {"search": name}
-    r = requests.get(url, headers=headers, params=params)
-    print(f"Search {name}:", r.status_code, r.text[:200])
-    results = r.json().get("response", [])
-    if results:
-        team = results[0]["team"]
-        team_id = team["id"]
-        league_id, season = get_current_league(team_id)
-        return team_id, team["name"], league_id, season
-    return None, None, None, None
+def add_player(name):
+    name = name.strip().title()
+    if name not in players:
+        players[name] = True
+        return True
+    return False
 
-def get_current_league(team_id):
-    url = "https://v3.football.api-sports.io/leagues"
-    headers = {"x-apisports-key": API_KEY}
-    params = {"team": team_id, "current": "true", "type": "League"}
-    r = requests.get(url, headers=headers, params=params)
-    results = r.json().get("response", [])
-    if results:
-        league_id = results[0]["league"]["id"]
-        season = results[0]["seasons"][0]["year"]
-        return league_id, season
-    return 39, 2024
+def add_match(player1, player2, score1, score2):
+    key = tuple(sorted([player1.title(), player2.title()]))
+    matches[key].append({
+        "p1": player1.title(),
+        "p2": player2.title(),
+        "s1": int(score1),
+        "s2": int(score2)
+    })
 
-def get_team_stats(team_id, league_id, season):
-    url = "https://v3.football.api-sports.io/teams/statistics"
-    headers = {"x-apisports-key": API_KEY}
-    params = {"team": team_id, "league": league_id, "season": season}
-    r = requests.get(url, headers=headers, params=params)
-    return r.json().get("response", {})
+def get_player_list():
+    if not players:
+        return "Aucun joueur enregistre."
+    return "Joueurs enregistres :\n" + "\n".join([f"- {p}" for p in sorted(players.keys())])
 
-def get_h2h(team1_id, team2_id):
-    url = "https://v3.football.api-sports.io/fixtures/headtohead"
-    headers = {"x-apisports-key": API_KEY}
-    params = {"h2h": f"{team1_id}-{team2_id}", "last": 10}
-    r = requests.get(url, headers=headers, params=params)
-    return r.json().get("response", [])
+def predict_match(p1, p2):
+    p1 = p1.strip().title()
+    p2 = p2.strip().title()
+    key = tuple(sorted([p1, p2]))
+    history = matches[key]
 
-def calculate_btts(home_stats, away_stats):
-    try:
-        h_scored = float(home_stats["goals"]["for"]["average"]["home"] or 0)
-        h_conceded = float(home_stats["goals"]["against"]["average"]["home"] or 0)
-        a_scored = float(away_stats["goals"]["for"]["average"]["away"] or 0)
-        a_conceded = float(away_stats["goals"]["against"]["average"]["away"] or 0)
-        home_scores = (h_scored + a_conceded) / 2
-        away_scores = (a_scored + h_conceded) / 2
-        prob = min(home_scores, 1.5) * min(away_scores, 1.5) * 50
-        return min(round(prob), 95)
-    except:
-        return 0
+    if not history:
+        return f"Aucun historique trouve pour {p1} vs {p2}.\nAjoute des resultats avec :\nresultat {p1} vs {p2} : 3-1, 3-0, 1-3"
 
-def calculate_over(home_stats, away_stats, threshold):
-    try:
-        home_avg = float(home_stats["goals"]["for"]["average"]["home"] or 0)
-        away_avg = float(away_stats["goals"]["for"]["average"]["away"] or 0)
-        total = home_avg + away_avg
-        if threshold == 1.5:
-            return min(round((total / 2.5) * 85), 95)
+    total = len(history)
+    p1_wins = sum(1 for m in history if m["p1"] == p1 and m["s1"] > m["s2"] or m["p2"] == p1 and m["s2"] > m["s1"])
+    p2_wins = total - p1_wins
+
+    p1_pct = round(p1_wins / total * 100)
+    p2_pct = 100 - p1_pct
+
+    # Compter les scores
+    score_count = defaultdict(int)
+    total_sets = []
+    for m in history:
+        s1 = m["s1"] if m["p1"] == p1 else m["s2"]
+        s2 = m["s2"] if m["p1"] == p1 else m["s1"]
+        score_count[f"{s1}-{s2}"] += 1
+        total_sets.append(s1 + s2)
+
+    # Score le plus frequent
+    best_score = max(score_count, key=score_count.get)
+    best_score_pct = round(score_count[best_score] / total * 100)
+
+    # Moyenne de sets
+    avg_sets = round(sum(total_sets) / len(total_sets), 1)
+
+    # Forme recente (5 derniers)
+    recent = history[-5:]
+    p1_form = ""
+    for m in recent:
+        if m["p1"] == p1:
+            p1_form += "V" if m["s1"] > m["s2"] else "D"
         else:
-            return min(round((total / 3.5) * 75), 95)
+            p1_form += "V" if m["s2"] > m["s1"] else "D"
+
+    p2_form = ""
+    for m in recent:
+        if m["p1"] == p2:
+            p2_form += "V" if m["s1"] > m["s2"] else "D"
+        else:
+            p2_form += "V" if m["s2"] > m["s1"] else "D"
+
+    # Vainqueur probable
+    winner = p1 if p1_wins > p2_wins else p2
+    winner_pct = max(p1_pct, p2_pct)
+
+    def niveau(p):
+        if p >= 70:
+            return "TRES FIABLE"
+        elif p >= 55:
+            return "FIABLE"
+        else:
+            return "RISQUE"
+
+    msg = f"PREDICTION : {p1} vs {p2}\n"
+    msg += f"({total} matchs analyses)\n\n"
+    msg += f"Vainqueur probable : {winner} - {winner_pct}% {niveau(winner_pct)}\n\n"
+    msg += f"Score exact probable : {best_score} ({best_score_pct}%)\n"
+    msg += f"Moyenne de sets : {avg_sets} sets par match\n\n"
+    msg += f"Tous les scores H2H :\n"
+    for score, count in sorted(score_count.items(), key=lambda x: -x[1]):
+        pct = round(count / total * 100)
+        msg += f"  {p1} {score} : {count}x ({pct}%)\n"
+    msg += f"\nForme recente {p1} : {p1_form}\n"
+    msg += f"Forme recente {p2} : {p2_form}\n"
+    msg += f"\n{p1} : {p1_wins} victoires\n"
+    msg += f"{p2} : {p2_wins} victoires"
+
+    return msg
+
+def parse_results(text):
+    # Format: "resultat Joueur1 vs Joueur2 : 3-1, 3-0, 1-3"
+    try:
+        parts = text.lower().split("resultat")[1]
+        players_part, scores_part = parts.split(":")
+        p1, p2 = players_part.strip().split(" vs ")
+        scores = scores_part.strip().split(",")
+        count = 0
+        for score in scores:
+            score = score.strip()
+            if "-" in score:
+                s1, s2 = score.split("-")
+                add_match(p1.strip(), p2.strip(), s1.strip(), s2.strip())
+                count += 1
+        return p1.strip().title(), p2.strip().title(), count
     except:
-        return 0
-
-def analyze_h2h(fixtures):
-    if not fixtures:
-        return 0, 0, 0
-    btts = over15 = over25 = 0
-    for f in fixtures:
-        home = f["goals"]["home"] or 0
-        away = f["goals"]["away"] or 0
-        total = home + away
-        if home > 0 and away > 0:
-            btts += 1
-        if total > 1:
-            over15 += 1
-        if total > 2:
-            over25 += 1
-    n = len(fixtures)
-    return round(btts/n*100), round(over15/n*100), round(over25/n*100)
-
-def niveau(p):
-    if p >= 75:
-        return "TRES FIABLE"
-    elif p >= 60:
-        return "FIABLE"
-    else:
-        return "RISQUE"
-
-def predict(home_name, away_name):
-    send_message(f"Recherche de {home_name} et {away_name}...")
-
-    home_id, home_full, home_league, home_season = search_team(home_name)
-    away_id, away_full, away_league, away_season = search_team(away_name)
-
-    if not home_id:
-        send_message(f"Equipe '{home_name}' non trouvee. Essaie un autre nom.")
-        return
-    if not away_id:
-        send_message(f"Equipe '{away_name}' non trouvee. Essaie un autre nom.")
-        return
-
-    send_message(f"Equipes trouvees : {home_full} vs {away_full}\nAnalyse en cours...")
-
-    home_stats = get_team_stats(home_id, home_league, home_season)
-    away_stats = get_team_stats(away_id, away_league, away_season)
-    h2h = get_h2h(home_id, away_id)
-
-    btts_stats = calculate_btts(home_stats, away_stats)
-    over15_stats = calculate_over(home_stats, away_stats, 1.5)
-    over25_stats = calculate_over(home_stats, away_stats, 2.5)
-    btts_h2h, over15_h2h, over25_h2h = analyze_h2h(h2h)
-
-    btts_final = round((btts_stats + btts_h2h) / 2) if btts_h2h > 0 else btts_stats
-    over15_final = round((over15_stats + over15_h2h) / 2) if over15_h2h > 0 else over15_stats
-    over25_final = round((over25_stats + over25_h2h) / 2) if over25_h2h > 0 else over25_stats
-
-    msg = f"PREDICTION : {home_full} vs {away_full}\n\n"
-    msg += f"BTTS : {btts_final}% - {niveau(btts_final)}\n"
-    msg += f"+1.5 buts : {over15_final}% - {niveau(over15_final)}\n"
-    msg += f"+2.5 buts : {over25_final}% - {niveau(over25_final)}\n\n"
-    msg += f"H2H : {len(h2h)} matchs analyses\n\n"
-    msg += "Pariez avec responsabilite"
-    send_message(msg)
+        return None, None, 0
 
 def get_updates(offset=None):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
@@ -141,9 +135,48 @@ def get_updates(offset=None):
     r = requests.get(url, params=params)
     return r.json().get("result", [])
 
+def handle_message(text):
+    text_lower = text.lower().strip()
+
+    # Ajouter joueur
+    if text_lower.startswith("joueur "):
+        name = text[7:].strip()
+        if add_player(name):
+            send_message(f"Joueur '{name}' ajoute avec succes !")
+        else:
+            send_message(f"Joueur '{name}' existe deja.")
+
+    # Liste joueurs
+    elif text_lower in ["liste", "joueurs", "liste joueurs"]:
+        send_message(get_player_list())
+
+    # Ajouter resultats
+    elif text_lower.startswith("resultat "):
+        p1, p2, count = parse_results(text)
+        if count > 0:
+            send_message(f"{count} resultat(s) ajoute(s) pour {p1} vs {p2} !")
+        else:
+            send_message("Format incorrect. Utilise :\nresultat Joueur1 vs Joueur2 : 3-1, 3-0, 1-3")
+
+    # Prediction
+    elif " vs " in text_lower:
+        parts = text.split(" vs ")
+        if len(parts) == 2:
+            result = predict_match(parts[0].strip(), parts[1].strip())
+            send_message(result)
+
+    # Aide
+    else:
+        msg = "Commandes disponibles :\n\n"
+        msg += "1. Ajouter joueur :\njoueur Nom Prenom\n\n"
+        msg += "2. Voir liste joueurs :\nliste\n\n"
+        msg += "3. Ajouter resultats :\nresultat Joueur1 vs Joueur2 : 3-1, 3-0, 1-3\n\n"
+        msg += "4. Prediction :\nJoueur1 vs Joueur2"
+        send_message(msg)
+
 def run():
-    print("Bot demarre !")
-    send_message("Bot PronoFoot pret ! Envoie un match comme : Arsenal vs Chelsea")
+    print("Bot Tennis de Table demarre !")
+    send_message("Bot Tennis de Table pret !\n\nEnvoie 'aide' pour voir les commandes.")
     offset = None
     while True:
         try:
@@ -151,10 +184,8 @@ def run():
             for update in updates:
                 offset = update["update_id"] + 1
                 msg = update.get("message", {}).get("text", "")
-                if " vs " in msg.lower():
-                    parts = msg.split(" vs ")
-                    if len(parts) == 2:
-                        predict(parts[0].strip(), parts[1].strip())
+                if msg:
+                    handle_message(msg)
         except Exception as e:
             print("Erreur:", e)
             time.sleep(5)
